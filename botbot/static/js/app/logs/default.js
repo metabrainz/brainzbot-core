@@ -59,14 +59,12 @@ $$.Cache = Backbone.Model.extend({
                 url: this.url,
                 success: _.bind(function (data, textStatus, jqXHR) {
                     this.url = jqXHR.getResponseHeader(this.pageHeader);
+                    this.prepPage(data);
+                    this.isLoading = false;
                     if (this.url === "" || this.url === null) {
-                        this.isLoading = false;
                         this.isFinished = true;
-                    } else {
-                        this.prepPage(data);
-                        this.isLoading = false;
-                        this.trigger('loaded', this);
                     }
+                    this.trigger('loaded', this);
                 }, this),
                 statusCode: {
                     404: _.bind(function () {
@@ -261,6 +259,17 @@ $$.Views.LogViewer = Backbone.View.extend({
     setDateHeader: function (date) {
         log('LogViewer:setDateHeader');
         $('#Log-Header .date').text(date.format('MMMM Do YYYY'));
+        // Update the browser URL to reflect the current scroll position
+        if (date && date.isValid()) {
+            var basePath = window.location.pathname.replace(/\d{4}-\d{2}-\d{2}\/$/, '');
+            var newPath = basePath + date.format('YYYY-MM-DD') + '/';
+            var params = new URLSearchParams(window.location.search);
+            params.delete('page');
+            var search = params.toString() ? '?' + params.toString() : '';
+            if (window.location.pathname !== newPath) {
+                window.history.replaceState(null, '', newPath + search);
+            }
+        }
     },
 
     scrollLoad: function () {
@@ -294,7 +303,7 @@ $$.Views.LogViewer = Backbone.View.extend({
             }
             return;
         }
-        if (cache.isFinished) {
+        if (cache.isFinished && cache.isEmpty()) {
             this.$el.removeClass('loading-' + cache.direction);
             $$.trigger('at-bottom');
             return;
@@ -335,7 +344,9 @@ $$.Views.LogViewer = Backbone.View.extend({
                 cache.$el.find('li:first'));
             cache.$el.children().appendTo(this.$logEl);
         }
-        cache.refetch();
+        if (!cache.isFinished) {
+            cache.refetch();
+        }
     }
 });
 
