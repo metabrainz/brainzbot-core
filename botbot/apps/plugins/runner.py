@@ -9,6 +9,7 @@ import redis
 import botbot_plugins.plugins
 from django.core.cache import cache
 from django.conf import settings
+from django.db import close_old_connections
 
 from botbot.apps.bots import models as bots_models
 from botbot.apps.plugins.utils import convert_nano_timestamp, log_on_error
@@ -215,6 +216,9 @@ class PluginRunner(object):
         while 1:
             val = None
             try:
+                # Close stale DB connections before processing each line
+                close_old_connections()
+
                 val = self.bot_bus.blpop('q', 1)
 
                 # Track q length
@@ -231,6 +235,13 @@ class PluginRunner(object):
                 LOG.error("Line Dispatch Failed", exc_info=True, extra={
                     "line": val
                 })
+                # Ensure stale DB connections are closed so the next
+                # iteration can re-establish a fresh connection.
+                try:
+                    close_old_connections()
+                except Exception:
+                    LOG.error("Failed to close DB connections",
+                              exc_info=True)
 
     def dispatch(self, line):
         """Given a line, dispatch it to the right plugins & functions."""
