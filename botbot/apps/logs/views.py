@@ -157,7 +157,10 @@ def _timeline_context(timeline):
 
     # the last month in the timeline needs special treatment so it
     # doesn't get ordered ahead of the last/current weeks
-    last_month = timeline.popitem(last=True)[1][-1]
+    last_year_key = next(reversed(timeline))
+    last_month = timeline[last_year_key].pop()
+    if not timeline[last_year_key]:
+        del timeline[last_year_key]
     if last_month >= last_week:
         last_month_adjusted = (last_week -
                                datetime.timedelta(days=1))
