@@ -6,6 +6,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Q
 from django.http import Http404, HttpResponse
+from django.template.loader import render_to_string
 from django.shortcuts import redirect, get_object_or_404
 from django.utils.functional import cached_property
 from django.utils.translation import gettext as _
@@ -283,6 +284,12 @@ class DayLogViewer(PaginatorPageLinksMixin, LogDateMixin, LogViewer, ListView):
     allow_empty = True
 
     def get(self, request, *args, **kwargs):
+        # Use cursor-based pagination for AJAX infinite scroll
+        after = request.GET.get('after')
+        before = request.GET.get('before')
+        if self.format == 'ajax' and (after or before):
+            return self._cursor_response(after, before)
+
         self.date = self.set_view_date()
         self.object_list = self.get_queryset()
 
@@ -328,6 +335,67 @@ class DayLogViewer(PaginatorPageLinksMixin, LogDateMixin, LogViewer, ListView):
         return context
 
 
+    def _cursor_response(self, after, before):
+        """Handle cursor-based pagination for AJAX infinite scroll.
+
+        Uses timestamp cursors instead of date+page to ensure messages
+        never repeat or get skipped when crossing day boundaries.
+        """
+        qs = self.channel.filtered_logs()
+        limit = self.paginate_by
+
+        if after:
+            after_ts = datetime.datetime.fromisoformat(after)
+            messages = list(
+                qs.filter(timestamp__gt=after_ts)
+                .order_by('timestamp')[:limit]
+            )
+        else:
+            before_ts = datetime.datetime.fromisoformat(before)
+            messages = list(
+                qs.filter(timestamp__lt=before_ts)
+                .order_by('-timestamp')[:limit]
+            )
+            messages.reverse()
+
+        context = {
+            'message_list': messages,
+            'channel': self.channel,
+            'show_first_header': True,
+        }
+        html = render_to_string(
+            'logs/log_display.html', context, request=self.request)
+        response = HttpResponse(html)
+
+        if messages:
+            first_ts = messages[0].timestamp.isoformat()
+            last_ts = messages[-1].timestamp.isoformat()
+            base_url = self.request.path
+
+            # Build next page cursor
+            has_next = qs.filter(
+                timestamp__gt=messages[-1].timestamp).exists()
+            if has_next:
+                params = self.request.GET.copy()
+                params['after'] = last_ts
+                params.pop('before', None)
+                params.pop('page', None)
+                response['X-NextPage'] = '{0}?{1}'.format(
+                    base_url, params.urlencode())
+
+            # Build previous page cursor
+            has_prev = qs.filter(
+                timestamp__lt=messages[0].timestamp).exists()
+            if has_prev:
+                params = self.request.GET.copy()
+                params['before'] = first_ts
+                params.pop('after', None)
+                params.pop('page', None)
+                response['X-PrevPage'] = '{0}?{1}'.format(
+                    base_url, params.urlencode())
+
+        return response
+
     def get_queryset(self):
         qs = self.channel.filtered_logs()
         qs = self.get_ordered_queryset(qs)
@@ -350,48 +418,48 @@ class DayLogViewer(PaginatorPageLinksMixin, LogDateMixin, LogViewer, ListView):
 
     def get_previous_page_link(self, page):
         """
-        Generate a link to the next page, from the current one.
+        Generate a cursor-based link to the previous page.
+        Uses timestamp of the first message on the current page.
         """
-        url = self.channel_date_url()
-        # copy, to maintain any params that came in to original request.
+        object_list = list(page.object_list)
+        if not object_list:
+            return None
+
+        first_msg = object_list[0]
+        # Check if there are older messages in the channel
+        has_prev = self.channel.filtered_logs().filter(
+            timestamp__lt=first_msg.timestamp).exists()
+        if not has_prev:
+            return None
+
+        url = self.request.path
         params = self.request.GET.copy()
-
-        if not page.has_previous():
-            date = self._get_previous_date()
-
-            if not date:
-                # We have no more logs!
-                return None
-
-            # Use new paginator to get dates max page number.
-            paginator = self._date_paginator(date)
-            params['page'] = paginator.num_pages
-
-            url = self.channel_date_url(date)
-        else:
-            params['page'] = page.previous_page_number()
-
+        params['before'] = first_msg.timestamp.isoformat()
+        params.pop('after', None)
+        params.pop('page', None)
         return '{0}?{1}'.format(url, params.urlencode())
 
     def get_next_page_link(self, page):
         """
-        Generate a link to the next page, from the current one.
+        Generate a cursor-based link to the next page.
+        Uses timestamp of the last message on the current page.
         """
-        url = self.channel_date_url()
+        object_list = list(page.object_list)
+        if not object_list:
+            return ""
 
-        # copy, to maintain any params that came in to original request.
+        last_msg = object_list[-1]
+        # Check if there are newer messages in the channel
+        has_next = self.channel.filtered_logs().filter(
+            timestamp__gt=last_msg.timestamp).exists()
+        if not has_next:
+            return ""
+
+        url = self.request.path
         params = self.request.GET.copy()
-
-        if not page.has_next():
-            date = self._get_next_date()
-            if date:
-                url = self.channel_date_url(date)
-                params['page'] = 1  # If new date, always start at page 1.
-            else:
-                return ""
-        else:
-            params['page'] = page.next_page_number()
-
+        params['after'] = last_msg.timestamp.isoformat()
+        params.pop('before', None)
+        params.pop('page', None)
         return '{0}?{1}'.format(url, params.urlencode())
 
     def get_current_page_link(self, page):
