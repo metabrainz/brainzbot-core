@@ -509,9 +509,7 @@ class SearchLogViewer(PaginatorPageLinksMixin, LogViewer, ListView):
         return super(SearchLogViewer, self).get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        """
-        Add the search term to the context data.
-        """
+        """Inject the active search term and form into the template context."""
         context = super(SearchLogViewer, self).get_context_data(**kwargs)
         context.update({
             'q': self.search_term,
@@ -520,25 +518,40 @@ class SearchLogViewer(PaginatorPageLinksMixin, LogViewer, ListView):
         return context
 
     def get_queryset(self):
-        """
-        Use search results rather than the standard queryset.
+        """Return channel logs matching the search query, ranked by relevance.
+
+        Supports an optional ``nick:<name>`` qualifier that filters results
+        to messages sent by a specific user *before* the full-text ranking
+        step.  Example query string: ``nick:alice django release``.
+
+        Uses :meth:`~botbot.apps.logs.models.LogManager.search` so that
+        results are ordered by PostgreSQL ``ts_rank`` (highest relevance
+        first) rather than by insertion order.
         """
         self.form = forms.SearchForm(self.request.GET)
-        if self.form.is_valid():
-            self.search_term = self.form.cleaned_data.get("q", "")
-        else:
-            self.search_term = ""
-        self.search_term = self.search_term.replace('%', '%%')
+        self.search_term = (
+            self.form.cleaned_data.get("q", "") if self.form.is_valid() else ""
+        )
 
         filter_args = self.channel.visible_commands_filter
 
-        # If a user is mentioned, filter those users first
-        matches = re.search(r'(\bnick:([\w\-]+)\b)', self.search_term)
-        if matches:
-            self.search_term = self.search_term.replace(matches.groups()[0], '')
-            filter_args = filter_args & Q(nick__icontains=matches.groups()[1])
+        # Extract optional ``nick:<name>`` qualifier and remove it from the
+        # search term so it does not pollute the full-text query.
+        nick_match = re.search(r'(\bnick:([\w\-]+)\b)', self.search_term)
+        if nick_match:
+            self.search_term = self.search_term.replace(
+                nick_match.group(1), ''
+            ).strip()
+            filter_args = filter_args & Q(nick__icontains=nick_match.group(2))
 
-        return self.channel.log_set.filter(search_index=self.search_term).filter(filter_args)
+        if not self.search_term:
+            return Log.objects.none()
+
+        return (
+            Log.objects.search(self.search_term)
+            .filter(channel=self.channel)
+            .filter(filter_args)
+        )
 
 
 class SingleLogViewer(DayLogViewer):
