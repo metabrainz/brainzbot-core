@@ -12,7 +12,8 @@ from django.conf import settings
 from django.db import close_old_connections
 
 from botbot.apps.bots import models as bots_models
-from botbot.apps.plugins.utils import convert_nano_timestamp, log_on_error
+from botbot.apps.plugins.utils import (
+    close_db_connections_after, convert_nano_timestamp, log_on_error)
 from .plugin import RealPluginMixin
 
 
@@ -258,7 +259,8 @@ class PluginRunner(object):
                 new_func = log_on_error(LOG, getattr(channel_plugin,
                                                      func.__name__))
                 if hasattr(self, 'gevent'):
-                    self.gevent.Greenlet.spawn(new_func, line)
+                    self.gevent.Greenlet.spawn(
+                        close_db_connections_after(new_func), line)
                 else:
                     channel_plugin.respond(new_func(line))
 
@@ -291,7 +293,8 @@ class PluginRunner(object):
         new_func = log_on_error(LOG, getattr(channel_plugin, func.__name__))
 
         if hasattr(self, 'gevent'):
-            grnlt = self.gevent.Greenlet(new_func, line, **arg_dict)
+            grnlt = self.gevent.Greenlet(
+                close_db_connections_after(new_func), line, **arg_dict)
             grnlt.link_value(channel_plugin.greenlet_respond)
             grnlt.start()
         else:

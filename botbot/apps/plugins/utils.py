@@ -1,6 +1,7 @@
 import datetime
 from functools import wraps
 
+from django.db import connections
 from django.template import Template, Context
 from django.template.defaultfilters import urlize
 
@@ -39,4 +40,22 @@ def log_on_error(Log, method):
             return method(*args, **kwargs)
         except Exception:
             Log.error("Plugin failed [%s]", method.__name__, exc_info=True)
+    return wrap
+
+
+def close_db_connections_after(method):
+    """
+    Close the DB connections opened by `method` once it returns.
+
+    With gevent, Django keeps one connection per greenlet. Plugin greenlets
+    are short-lived and are not tied to a request, so nothing closes their
+    connection when they finish. With CONN_MAX_AGE=None those connections
+    stay open and pile up until PostgreSQL refuses new clients.
+    """
+    @wraps(method)
+    def wrap(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        finally:
+            connections.close_all()
     return wrap

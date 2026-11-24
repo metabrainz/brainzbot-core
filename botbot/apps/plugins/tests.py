@@ -1,7 +1,9 @@
  # -*- coding: utf-8 -*-
 import datetime
 
-from django.test import TestCase
+from unittest import mock
+
+from django.test import SimpleTestCase, TestCase
 from datetime import datetime, timezone
 from . import utils
 
@@ -20,3 +22,18 @@ class UtilsTestCase(TestCase):
         self.assertEqual(py_date,
                          datetime.datetime(2014, 1, 27, 16, 35, 
                                            53, 123400, tzinfo=datetime.UTC))
+
+class CloseDbConnectionsAfterTestCase(SimpleTestCase):
+    @mock.patch('botbot.apps.plugins.utils.connections')
+    def test_closes_connections_after_return(self, connections):
+        func = utils.close_db_connections_after(lambda x: x + 1)
+        self.assertEqual(func(1), 2)
+        connections.close_all.assert_called_once_with()
+
+    @mock.patch('botbot.apps.plugins.utils.connections')
+    def test_closes_connections_on_error(self, connections):
+        def boom():
+            raise ValueError
+        with self.assertRaises(ValueError):
+            utils.close_db_connections_after(boom)()
+        connections.close_all.assert_called_once_with()
